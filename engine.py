@@ -11,7 +11,7 @@ class Backtest_Engine:
         if not data.index.is_unique:
             raise ValueError('Index must be unique')
 
-    # Vérifications concernant les poids
+    # Weights check
     def _check_no_nan(self, data):
         if data.isna().any().any():
             raise ValueError("Data can not be NaN")
@@ -36,7 +36,7 @@ class Backtest_Engine:
         if not weights.columns.equals(prices.columns):
             raise ValueError("Weights and prices must have same columns")
 
-    #Vérifications concernant les prix
+    #Prices check
     def _check_positive_prices(self, prices):
         if (prices <=0).any().any() :
             raise ValueError("Prices must be positive")
@@ -52,7 +52,7 @@ class Backtest_Engine:
     def validate_position(self):
         pass
 
-    #La fonction run calcule les contributions aux rendements pondérés par les poids donnés
+    # Calculate contributions
     def compute_contributions(self, prices: pd.DataFrame , weights: pd.DataFrame) -> pd.DataFrame:
         #Calcul es contributions
         self.validate_weights(weights)
