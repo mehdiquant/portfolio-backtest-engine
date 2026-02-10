@@ -1,69 +1,175 @@
 import pandas as pd
-import numpy as np
+
 
 class Backtest_Engine:
-    def __init__(self):
-        pass
+    """
+    Execution-only backtest engine.
 
-    def _check_clean_index(self,data):
+    This class is responsible for:
+    - validating input data (prices, weights)
+    - enforcing execution constraints (long-only, no leverage)
+    - executing portfolio returns without look-ahead bias
+
+    The engine is deliberately strategy-agnostic:
+    it does not generate signals, forecasts, or weights.
+    """
+
+    # Numerical tolerance used for floating-point comparisons
+    TOL = 1e-6
+
+    def __init__(self, prices, weights):
+        """
+        Initialize the backtest engine with exogenous inputs.
+
+        Parameters
+        ----------
+        prices : pd.DataFrame
+            Asset prices indexed by date.
+        weights : pd.DataFrame
+            Portfolio weights decided ex-ante
+            (same index and columns as prices).
+        """
+        # Input price data
+        self.prices = prices
+
+        # Input portfolio weights
+        self.weights = weights
+
+        # Fundamental engine output:
+        # per-asset return contributions (set after run)
+        self.contributions = None
+
+    # ------------------------------------------------------------------
+    # Generic checks (shared by prices and weights)
+    # ------------------------------------------------------------------
+
+    def _check_clean_index(self, data, name):
+        """
+        Ensure that the index is:
+        - strictly increasing
+        - unique
+
+        This prevents duplicated timestamps and look-ahead issues.
+        """
         if not data.index.is_monotonic_increasing:
-            raise ValueError('Sorted index must be monotonic increasing')
+            raise ValueError(f"Sorted {name} index must be monotonic increasing")
         if not data.index.is_unique:
-            raise ValueError('Index must be unique')
+            raise ValueError(f"{name} index must be unique")
 
-    # Weights check
-    def _check_no_nan(self, data):
+    def _check_no_nan(self, data, name):
+        """
+        Ensure that the input data contains no NaN values.
+        """
         if data.isna().any().any():
-            raise ValueError("Data can not be NaN")
+            raise ValueError(f"{name} contains NaN")
 
-    def _check_normalized_weights(self, weights):
-        if (abs(weights.sum(axis=1) - 1 )> 1e-6).any() :
-            raise ValueError("Weights must be normalized")
+    # ------------------------------------------------------------------
+    # Weight-specific checks
+    # ------------------------------------------------------------------
 
-    def _check_positive_weights(self, weights):
-        if (weights <0).any().any() :
-            raise ValueError("Weights must be positive")
+    def _check_net_exposure(self):
+        """
+        Enforce execution constraint:
+        net exposure must not exceed 100%.
 
-    def validate_weights(self,weights):
-        self._check_no_nan(weights)
-        self._check_clean_index(weights)
-        self._check_positive_weights(weights)
-        self._check_normalized_weights(weights)
+        This corresponds to a long-only, no-leverage mandate.
+        """
+        if (self.weights.sum(axis=1) > 1 + self.TOL).any():
+            raise ValueError("Net exposure exceeds 100% (no leverage allowed)")
 
-    def validate_match_data(self, weights,prices):
-        if not weights.index.equals(prices.index):
-            raise ValueError("Prices and weights must have same index")
-        if not weights.columns.equals(prices.columns):
-            raise ValueError("Weights and prices must have same columns")
+    def _check_not_negative(self, data, name):
+        """
+        Ensure that data is non-negative.
+        Zero values are allowed (e.g. cash positions).
+        """
+        if (data < 0).any().any():
+            raise ValueError(f"{name} must be non-negative")
 
-    #Prices check
-    def _check_positive_prices(self, prices):
-        if (prices <=0).any().any() :
-            raise ValueError("Prices must be positive")
+    def validate_weights(self):
+        """
+        Validate portfolio weights under execution constraints.
+        """
+        self._check_no_nan(self.weights, "Weights")
+        self._check_clean_index(self.weights, "Weights")
+        self._check_not_negative(self.weights, "Weights")
+        self._check_net_exposure()
 
-    def validate_prices(self,prices):
-        self._check_no_nan(prices)
-        self._check_clean_index(prices)
-        self._check_positive_prices(prices)
+    # ------------------------------------------------------------------
+    # Price-specific checks
+    # ------------------------------------------------------------------
 
+    def _check_positive(self, data, name):
+        """
+        Ensure that price data is strictly positive.
+        Prices equal to zero are considered invalid.
+        """
+        if (data <= 0).any().any():
+            raise ValueError(f"{name} must be strictly positive")
 
+    def validate_prices(self):
+        """
+        Validate input price data.
+        """
+        self._check_no_nan(self.prices, "Prices")
+        self._check_clean_index(self.prices, "Prices")
+        self._check_positive(self.prices, "Prices")
 
+    # ------------------------------------------------------------------
+    # Cross-data consistency checks
+    # ------------------------------------------------------------------
 
-    def validate_position(self):
-        pass
+    def validate_match_data(self):
+        """
+        Ensure that prices and weights are perfectly aligned:
+        - same index (dates)
+        - same columns (assets)
+        """
+        if not self.weights.index.equals(self.prices.index):
+            raise ValueError("Prices and weights must have the same index")
+        if not self.weights.columns.equals(self.prices.columns):
+            raise ValueError("Prices and weights must have the same columns")
 
-    # Calculate contributions
-    def compute_contributions(self, prices: pd.DataFrame , weights: pd.DataFrame) -> pd.DataFrame:
-        #Calcul es contributions
-        self.validate_weights(weights)
-        self.validate_prices(prices)
-        self.validate_match_data(weights,prices)
+    # ------------------------------------------------------------------
+    # Backtest execution
+    # ------------------------------------------------------------------
 
-        returns = prices.pct_change()
-        return (returns * weights.shift(1)).dropna()
+    def run(self):
+        """
+        Execute the backtest.
 
-    def compute_returns(self, prices: pd.DataFrame, weights: pd.DataFrame) -> pd.Series:
-        return self.compute_contributions(prices,weights).sum(axis=1)
+        This method:
+        - validates all inputs
+        - computes asset returns (close-to-close)
+        - applies weights decided at t-1
+        - stores per-asset return contributions
+        """
+        # Validate all inputs before execution
+        self.validate_prices()
+        self.validate_weights()
+        self.validate_match_data()
 
+        # Compute asset returns (close-to-close)
+        asset_returns = self.prices.pct_change()
 
+        # Compute per-asset return contributions
+        # using weights decided at the previous period (no look-ahead)
+        contributions_returns = asset_returns * self.weights.shift(1)
 
+        # Store fundamental engine output
+        self.contributions = contributions_returns.dropna()
+
+    # ------------------------------------------------------------------
+    # Derived quantities
+    # ------------------------------------------------------------------
+
+    @property
+    def returns(self):
+        """
+        Portfolio returns per period.
+
+        This is a derived quantity obtained by aggregating
+        per-asset return contributions.
+        """
+        if self.contributions is None:
+            raise RuntimeError("Contributions not computed yet")
+        return self.contributions.sum(axis=1)
